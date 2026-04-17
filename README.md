@@ -20,8 +20,8 @@ The bot UI matches the provided design screenshots:
 ```bash
 git clone <this-repo>
 cd vpn-bot
-cp .env.example .env.example
-nano .env.example  # Fill in your tokens
+cp .env.example .env
+nano .env  # Fill in your tokens
 ```
 
 ### 2. Required .env values
