@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import settings
@@ -40,16 +40,12 @@ def period_keyboard(vpn_type: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     premium = vpn_type == "whitelist"
     flag = "🔴 " if premium else ""
-
-    p30 = settings.format_price(settings.get_plan_price(30, premium))
-    p90 = settings.format_price(settings.get_plan_price(90, premium))
-    p180 = settings.format_price(settings.get_plan_price(180, premium))
-    p365 = settings.format_price(settings.get_plan_price(365, premium))
-
-    builder.row(InlineKeyboardButton(text=f"30 дней {flag}- {p30}", callback_data="period:30"))
-    builder.row(InlineKeyboardButton(text=f"90 дней {flag}- {p90}", callback_data="period:90"))
-    builder.row(InlineKeyboardButton(text=f"180 дней {flag}- {p180}", callback_data="period:180"))
-    builder.row(InlineKeyboardButton(text=f"365 дней {flag}- {p365}", callback_data="period:365"))
+    for days in [30, 90, 180, 365]:
+        price = settings.format_price(settings.get_plan_price(days, premium))
+        builder.row(InlineKeyboardButton(
+            text=f"{days} дней {flag}— {price}",
+            callback_data=f"period:{days}",
+        ))
     builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="buy_subscription"))
     return builder.as_markup()
 
@@ -60,68 +56,32 @@ def payment_method_keyboard(
     stars: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-
     if yookassa:
-        extra = f"(+{settings.yookassa_extra_percent}%)"
         builder.row(InlineKeyboardButton(
-            text=f"💳 ЮКасса: СБП, Карта{extra}",
+            text=f"💳 ЮКасса: СБП, Карта (+{settings.yookassa_extra_percent}%)",
             callback_data="pay:yookassa",
         ))
     if cryptobot:
-        builder.row(InlineKeyboardButton(
-            text="₿ CryptoBot",
-            callback_data="pay:cryptobot",
-        ))
+        builder.row(InlineKeyboardButton(text="₿ CryptoBot", callback_data="pay:cryptobot"))
     if stars:
-        builder.row(InlineKeyboardButton(
-            text="⭐ Telegram Stars",
-            callback_data="pay:stars",
-        ))
-
-    # Balance payment always available
+        builder.row(InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="pay:stars"))
+    # Balance is always available
     builder.row(InlineKeyboardButton(text="💼 Оплата с баланса", callback_data="pay:balance"))
     builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="buy_subscription"))
     return builder.as_markup()
 
 
-def topup_payment_keyboard(
-    yookassa: bool = False,
-    cryptobot: bool = False,
-) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-
-    if yookassa:
-        extra = f"(+{settings.yookassa_extra_percent}%)"
-        builder.row(InlineKeyboardButton(
-            text=f"💳 ЮКасса: СБП, Карта{extra}",
-            callback_data="topup_pay:yookassa",
-        ))
-    if cryptobot:
-        builder.row(InlineKeyboardButton(
-            text="₿ CryptoBot",
-            callback_data="topup_pay:cryptobot",
-        ))
-
-    builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="topup_balance"))
-    return builder.as_markup()
-
-
-def topup_quick_amounts_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    amounts = [100, 200, 500, 1000, 2000, 5000]
-    for amount in amounts:
-        builder.button(
-            text=f"{amount} RUB",
-            callback_data=f"topup_amount:{amount * 100}",  # store in kopecks
-        )
-    builder.adjust(3)
-    builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="main_menu"))
-    return builder.as_markup()
-
-
 def payment_link_keyboard(url: str) -> InlineKeyboardMarkup:
+    """Payment URL button.  Never passes an invalid URL to Telegram."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="💳 Оплата", url=url))
+    if url and url.startswith("https://"):
+        builder.row(InlineKeyboardButton(text="💳 Оплата", url=url))
+    else:
+        # Fallback: non-URL button so Telegram doesn't raise "wrong HTTP URL"
+        builder.row(InlineKeyboardButton(
+            text="❌ Ссылка недоступна — обратитесь в поддержку",
+            callback_data="main_menu",
+        ))
     builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="main_menu"))
     return builder.as_markup()
 
@@ -131,10 +91,4 @@ def subscription_detail_keyboard(sub_id: int, has_remnawave: bool = False) -> In
     if has_remnawave:
         builder.row(InlineKeyboardButton(text="🔗 Получить ссылку", callback_data=f"get_link:{sub_id}"))
     builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="my_subscriptions"))
-    return builder.as_markup()
-
-
-def cancel_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu"))
     return builder.as_markup()

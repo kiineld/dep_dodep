@@ -7,13 +7,17 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      TZ: "Europe/Moscow"
     volumes:
-      - ./data:/app/data
-    depends_on: []
+      - ./data:/app/data          # SQLite DB + bot.log
+      - ./assets:/app/assets:ro  # banner.jpg (read-only)
+      - ./logs:/app/logs          # rotating logs
     networks:
       - bot_network
 
-  # Optional PostgreSQL (uncomment if you switch DATABASE_URL to postgres)
+  # ── Optional PostgreSQL ──────────────────────────────────────────────────
+  # Uncomment + change DATABASE_URL to postgresql+asyncpg://... in .env
   # postgres:
   #   image: postgres:15-alpine
   #   container_name: vpn_bot_db
@@ -26,6 +30,11 @@ services:
   #     - postgres_data:/var/lib/postgresql/data
   #   networks:
   #     - bot_network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U vpnuser -d vpnbot"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
 
 networks:
   bot_network:

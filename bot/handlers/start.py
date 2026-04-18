@@ -1,19 +1,14 @@
-import os
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 
 from bot.config import settings
 from bot.database import User
 from bot.keyboards.user import main_menu_keyboard, back_button
+from bot.utils.navigation import send_photo_message, edit_or_resend
 
 router = Router()
-
-
-def get_banner() -> FSInputFile:
-    """Return local banner photo as FSInputFile."""
-    return FSInputFile(settings.banner_photo)
 
 
 def get_main_menu_text(user: User) -> str:
@@ -27,47 +22,13 @@ def get_main_menu_text(user: User) -> str:
     )
 
 
-async def send_main_menu(target, db_user: User):
-    """Send or edit the main menu photo+caption message."""
-    text = get_main_menu_text(db_user)
-    kb = main_menu_keyboard()
-
-    if isinstance(target, Message):
-        await target.answer_photo(
-            photo=get_banner(),
-            caption=text,
-            reply_markup=kb,
-            parse_mode="HTML",
-        )
-    elif isinstance(target, CallbackQuery):
-        try:
-            # Try to just edit the caption (photo already shown)
-            await target.message.edit_caption(
-                caption=text,
-                reply_markup=kb,
-                parse_mode="HTML",
-            )
-        except Exception:
-            # If the previous message had no photo, send a new one
-            await target.message.answer_photo(
-                photo=get_banner(),
-                caption=text,
-                reply_markup=kb,
-                parse_mode="HTML",
-            )
-            try:
-                await target.message.delete()
-            except Exception:
-                pass
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message, db_user: User, state: FSMContext):
     await state.clear()
     if db_user.is_banned:
         await message.answer("🚫 Ваш аккаунт заблокирован. Обратитесь в поддержку.")
         return
-    await send_main_menu(message, db_user)
+    await send_photo_message(message, get_main_menu_text(db_user), main_menu_keyboard())
 
 
 @router.callback_query(F.data == "main_menu")
@@ -76,7 +37,7 @@ async def cb_main_menu(callback: CallbackQuery, db_user: User, state: FSMContext
     if db_user.is_banned:
         await callback.answer("🚫 Вы заблокированы", show_alert=True)
         return
-    await send_main_menu(callback, db_user)
+    await edit_or_resend(callback, get_main_menu_text(db_user), main_menu_keyboard())
     await callback.answer()
 
 
@@ -94,14 +55,5 @@ async def cb_about(callback: CallbackQuery):
         "iOS, Android, Windows, macOS, Linux\n\n"
         "🛟 По всем вопросам: @support"
     )
-    try:
-        await callback.message.edit_caption(
-            caption=text,
-            reply_markup=back_button("main_menu"),
-            parse_mode="HTML",
-        )
-    except Exception:
-        await callback.message.answer(
-            text, reply_markup=back_button("main_menu"), parse_mode="HTML"
-        )
+    await edit_or_resend(callback, text, back_button("main_menu"))
     await callback.answer()

@@ -1,40 +1,46 @@
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
+import logging, uuid as _uuid
 
 from bot.config import settings
 from bot.database import User
-from bot.keyboards.user import (
-    topup_quick_amounts_keyboard,
-    topup_payment_keyboard,
-    payment_link_keyboard,
-    back_button,
-    cancel_keyboard,
-)
+from bot.keyboards.user import payment_link_keyboard, back_button
 from bot.services.subscription_service import create_transaction
 from bot.services.user_service import update_user_balance
 from bot.states import TopUpFlow
-import logging
+from bot.utils.navigation import edit_or_resend, send_photo_message
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
-async def _edit_or_send(callback: CallbackQuery, text: str, reply_markup=None):
-    try:
-        await callback.message.edit_caption(
-            caption=text, reply_markup=reply_markup, parse_mode="HTML"
-        )
-    except Exception:
-        try:
-            await callback.message.edit_text(
-                text=text, reply_markup=reply_markup, parse_mode="HTML"
-            )
-        except Exception:
-            await callback.message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+def _topup_amounts_kb() -> any:
+    """Quick-amount buttons + back to main menu."""
+    builder = InlineKeyboardBuilder()
+    for amount in [100, 200, 500, 1000, 2000, 5000]:
+        builder.button(text=f"{amount} RUB", callback_data=f"topup_amount:{amount * 100}")
+    builder.adjust(3)
+    builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="main_menu"))
+    return builder.as_markup()
 
 
-# ── Step 1: Show amount entry screen ─────────────────────────────────────────
+def _topup_payment_kb() -> any:
+    builder = InlineKeyboardBuilder()
+    if settings.yookassa_enabled:
+        extra = f"(+{settings.yookassa_extra_percent}%)"
+        builder.row(InlineKeyboardButton(
+            text=f"💳 ЮКасса: СБП, Карта {extra}",
+            callback_data="topup_pay:yookassa",
+        ))
+    if settings.cryptobot_enabled:
+        builder.row(InlineKeyboardButton(text="₿ CryptoBot", callback_data="topup_pay:cryptobot"))
+    builder.row(InlineKeyboardButton(text="⬅️ Вернуться назад", callback_data="topup_balance"))
+    return builder.as_markup()
+
+
+# ── Step 1: Show amount selection ─────────────────────────────────────────────
 
 @router.callback_query(F.data == "topup_balance")
 async def cb_topup_start(callback: CallbackQuery, db_user: User, state: FSMContext):
@@ -42,20 +48,25 @@ async def cb_topup_start(callback: CallbackQuery, db_user: User, state: FSMConte
     text = (
         "💰 <b>Пополнение баланса</b>\n\n"
         f"Текущий баланс: <b>{settings.format_price(db_user.balance)}</b>\n\n"
-        "Выберите сумму или введите вручную (минимум 50 RUB):"
+        "Выберите сумму пополнения или введите вручную (минимум 50 RUB):"
     )
-    await _edit_or_send(callback, text, topup_quick_amounts_keyboard())
+    await edit_or_resend(callback, text, _topup_amounts_kb())
     await state.set_state(TopUpFlow.entering_amount)
     await callback.answer()
 
 
-# ── Quick amount selection ────────────────────────────────────────────────────
+# ── Quick-amount button ───────────────────────────────────────────────────────
 
 @router.callback_query(TopUpFlow.entering_amount, F.data.startswith("topup_amount:"))
-async def cb_topup_quick_amount(callback: CallbackQuery, db_user: User, state: FSMContext):
+async def cb_topup_quick(callback: CallbackQuery, state: FSMContext):
     amount_kopecks = int(callback.data.split(":")[1])
     await state.update_data(amount_kopecks=amount_kopecks)
-    await _show_payment_choice(callback, db_user, state, amount_kopecks)
+    text = (
+        "💳 <b>Выберите способ пополнения баланса</b>\n\n"
+        f"Сумма: <b>{settings.format_price(amount_kopecks)}</b>"
+    )
+    await edit_or_resend(callback, text, _topup_payment_kb())
+    await state.set_state(TopUpFlow.choosing_payment)
     await callback.answer()
 
 
@@ -63,57 +74,50 @@ async def cb_topup_quick_amount(callback: CallbackQuery, db_user: User, state: F
 
 @router.message(TopUpFlow.entering_amount)
 async def msg_topup_amount(message: Message, db_user: User, state: FSMContext):
-    text = message.text.strip().replace(",", ".").replace(" ", "")
+    raw = message.text.strip().replace(",", ".").replace(" ", "")
     try:
-        amount_rub = float(text)
+        amount_rub = float(raw)
         if amount_rub < 50:
-            await message.answer(
-                "❌ Минимальная сумма пополнения — 50 RUB.",
-                reply_markup=cancel_keyboard(),
+            # Delete user message, re-show the amounts screen with error note
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            text = (
+                "💰 <b>Пополнение баланса</b>\n\n"
+                f"Текущий баланс: <b>{settings.format_price(db_user.balance)}</b>\n\n"
+                "❌ Минимальная сумма — <b>50 RUB</b>. Попробуйте снова:"
             )
+            await send_photo_message(message, text, _topup_amounts_kb())
             return
         amount_kopecks = int(amount_rub * 100)
     except ValueError:
-        await message.answer(
-            "❌ Введите корректную сумму (например: <code>500</code>)",
-            reply_markup=cancel_keyboard(),
-            parse_mode="HTML",
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        text = (
+            "💰 <b>Пополнение баланса</b>\n\n"
+            "❌ Введите корректное число (например: <code>500</code>):"
         )
+        await send_photo_message(message, text, _topup_amounts_kb())
         return
 
     await state.update_data(amount_kopecks=amount_kopecks)
-
-    kb = topup_payment_keyboard(
-        yookassa=settings.yookassa_enabled,
-        cryptobot=settings.cryptobot_enabled,
-    )
-    text = (
-        f"💳 <b>Выберите способ пополнения баланса</b>\n\n"
-        f"Сумма: <b>{settings.format_price(amount_kopecks)}</b>"
-    )
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
-    await state.set_state(TopUpFlow.choosing_payment)
-
-
-async def _show_payment_choice(
-    callback: CallbackQuery,
-    db_user: User,
-    state: FSMContext,
-    amount_kopecks: int,
-):
-    kb = topup_payment_keyboard(
-        yookassa=settings.yookassa_enabled,
-        cryptobot=settings.cryptobot_enabled,
-    )
+    # Delete the user's raw text message
+    try:
+        await message.delete()
+    except Exception:
+        pass
     text = (
         "💳 <b>Выберите способ пополнения баланса</b>\n\n"
         f"Сумма: <b>{settings.format_price(amount_kopecks)}</b>"
     )
-    await _edit_or_send(callback, text, kb)
+    await send_photo_message(message, text, _topup_payment_kb())
     await state.set_state(TopUpFlow.choosing_payment)
 
 
-# ── YooKassa top-up ───────────────────────────────────────────────────────────
+# ── Pay: YooKassa ─────────────────────────────────────────────────────────────
 
 @router.callback_query(TopUpFlow.choosing_payment, F.data == "topup_pay:yookassa")
 async def cb_topup_yookassa(callback: CallbackQuery, db_user: User, state: FSMContext):
@@ -121,10 +125,15 @@ async def cb_topup_yookassa(callback: CallbackQuery, db_user: User, state: FSMCo
     amount_kopecks = data.get("amount_kopecks", 0)
     extra = settings.yookassa_extra_percent
     total_kopecks = int(amount_kopecks * (1 + extra / 100))
+    await callback.answer("⏳ Создаю счёт...")
 
-    pay_url = await _create_yookassa_topup(db_user.id, total_kopecks)
+    pay_url = await _yookassa_topup(db_user.id, total_kopecks)
     if not pay_url:
-        await callback.answer("❌ Ошибка создания платежа. Попробуйте позже.", show_alert=True)
+        await edit_or_resend(
+            callback,
+            "❌ <b>Ошибка создания платежа.</b>\n\nПроверьте настройки YooKassa или попробуйте позже.",
+            back_button("topup_balance"),
+        )
         return
 
     text = (
@@ -134,52 +143,24 @@ async def cb_topup_yookassa(callback: CallbackQuery, db_user: User, state: FSMCo
         f"(включая комиссию {extra}%)\n\n"
         "После оплаты баланс пополнится автоматически."
     )
-    await _edit_or_send(callback, text, payment_link_keyboard(pay_url))
-    await callback.answer()
+    await edit_or_resend(callback, text, payment_link_keyboard(pay_url))
 
 
-async def _create_yookassa_topup(user_id: int, amount_kopecks: int) -> str:
-    try:
-        import aiohttp, uuid as uuidlib
-        amount_rub = amount_kopecks / 100
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.yookassa.ru/v3/payments",
-                json={
-                    "amount": {"value": f"{amount_rub:.2f}", "currency": "RUB"},
-                    "confirmation": {"type": "redirect", "return_url": "https://t.me/"},
-                    "capture": True,
-                    "description": f"Пополнение баланса - user {user_id}",
-                    "metadata": {"user_id": user_id, "type": "topup"},
-                },
-                auth=aiohttp.BasicAuth(
-                    settings.yookassa_shop_id,
-                    settings.yookassa_secret_key,
-                ),
-                headers={
-                    "Idempotence-Key": str(uuidlib.uuid4()),
-                    "Content-Type": "application/json",
-                },
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    return result["confirmation"]["confirmation_url"]
-    except Exception as e:
-        logger.error(f"YooKassa topup error: {e}")
-    return None
-
-
-# ── CryptoBot top-up ──────────────────────────────────────────────────────────
+# ── Pay: CryptoBot ────────────────────────────────────────────────────────────
 
 @router.callback_query(TopUpFlow.choosing_payment, F.data == "topup_pay:cryptobot")
 async def cb_topup_cryptobot(callback: CallbackQuery, db_user: User, state: FSMContext):
     data = await state.get_data()
     amount_kopecks = data.get("amount_kopecks", 0)
-    amount_rub = amount_kopecks / 100
+    await callback.answer("⏳ Создаю счёт...")
 
-    pay_url = await _create_cryptobot_invoice(db_user.id, amount_rub)
+    pay_url = await _cryptobot_invoice(db_user.id, amount_kopecks / 100)
     if not pay_url:
-        await callback.answer("❌ Ошибка создания платежа. Попробуйте позже.", show_alert=True)
+        await edit_or_resend(
+            callback,
+            "❌ <b>Ошибка создания платежа.</b>\n\nПроверьте настройки CryptoBot или попробуйте позже.",
+            back_button("topup_balance"),
+        )
         return
 
     text = (
@@ -187,11 +168,46 @@ async def cb_topup_cryptobot(callback: CallbackQuery, db_user: User, state: FSMC
         f"Сумма: <b>{settings.format_price(amount_kopecks)}</b>\n\n"
         "Перейдите по ссылке для завершения оплаты:"
     )
-    await _edit_or_send(callback, text, payment_link_keyboard(pay_url))
-    await callback.answer()
+    await edit_or_resend(callback, text, payment_link_keyboard(pay_url))
 
 
-async def _create_cryptobot_invoice(user_id: int, amount_rub: float) -> str:
+# ── YooKassa helper ───────────────────────────────────────────────────────────
+
+async def _yookassa_topup(user_id: int, amount_kopecks: int) -> str:
+    try:
+        import aiohttp
+        amount_rub = amount_kopecks / 100
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.yookassa.ru/v3/payments",
+                json={
+                    "amount": {"value": f"{amount_rub:.2f}", "currency": "RUB"},
+                    "confirmation": {"type": "redirect", "return_url": "https://t.me"},
+                    "capture": True,
+                    "description": f"Пополнение баланса – user {user_id}",
+                    "metadata": {"user_id": str(user_id), "type": "topup"},
+                },
+                auth=aiohttp.BasicAuth(
+                    settings.yookassa_shop_id,
+                    settings.yookassa_secret_key,
+                ),
+                headers={
+                    "Idempotence-Key": str(_uuid.uuid4()),
+                    "Content-Type": "application/json",
+                },
+            ) as resp:
+                if resp.status in (200, 201):
+                    result = await resp.json()
+                    url = result.get("confirmation", {}).get("confirmation_url", "")
+                    return url if url.startswith("https://") else ""
+    except Exception as e:
+        logger.error(f"YooKassa topup error: {e}")
+    return ""
+
+
+# ── CryptoBot helper ──────────────────────────────────────────────────────────
+
+async def _cryptobot_invoice(user_id: int, amount_rub: float) -> str:
     try:
         import aiohttp
         async with aiohttp.ClientSession() as session:
@@ -199,7 +215,7 @@ async def _create_cryptobot_invoice(user_id: int, amount_rub: float) -> str:
                 "https://pay.crypt.bot/api/createInvoice",
                 json={
                     "asset": "USDT",
-                    "amount": f"{amount_rub / 90:.2f}",  # approx RUB→USDT
+                    "amount": f"{amount_rub / 90:.4f}",   # approx RUB → USDT
                     "description": f"Balance top-up user {user_id}",
                     "payload": str(user_id),
                     "allow_comments": False,
@@ -210,7 +226,8 @@ async def _create_cryptobot_invoice(user_id: int, amount_rub: float) -> str:
                 if resp.status == 200:
                     result = await resp.json()
                     if result.get("ok"):
-                        return result["result"]["bot_invoice_url"]
+                        url = result["result"].get("bot_invoice_url", "")
+                        return url if url.startswith("https://") else ""
     except Exception as e:
         logger.error(f"CryptoBot error: {e}")
-    return None
+    return ""

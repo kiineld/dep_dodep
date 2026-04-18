@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     @property
     def banner_photo(self) -> str:
         import os
-        return os.path.join(self.assets_path, "banner.png")
+        return os.path.join(self.assets_path, "banner.jpg")
 
     @property
     def admin_ids_list(self) -> List[int]:
