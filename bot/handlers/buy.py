@@ -186,6 +186,7 @@ async def _purchase_subscription(
             traffic_limit_bytes=traffic_bytes,
             expire_at=expire_at,
             description=f"Bot purchase: {vpn_type} {days}d",
+            squad_uuids=["5a2658aa-fc7e-4537-9047-77dbac73e8e5"]
         )
         if rw_user:
             remnawave_uuid = rw_user.get("uuid")
