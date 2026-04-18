@@ -34,7 +34,7 @@ async def cmd_start(message: Message, db_user: User, state: FSMContext):
 
     text = get_main_menu_text(db_user)
     await message.answer_photo(
-        photo="https://i.imgur.com/ZfKtBVM.jpeg",  # fallback photo
+        photo="assets/logo.jpg",  # fallback photo
         caption=text,
         reply_markup=main_menu_keyboard(),
         parse_mode="HTML",
