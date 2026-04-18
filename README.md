@@ -18,7 +18,7 @@ The bot UI matches the provided design screenshots:
 ### 1. Clone & configure
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/kiineld/dep_dodep
 cd vpn-bot
 cp .env.example .env
 nano .env  # Fill in your tokens
