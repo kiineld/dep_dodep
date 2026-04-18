@@ -77,6 +77,7 @@ class RemnaWaveClient:
         traffic_limit_bytes: int,
         expire_at: str,
         description: str = "",
+        squad_uuids: list = None
     ) -> Optional[Dict]:
         data = {
             "telegramId": telegram_id,
@@ -85,6 +86,8 @@ class RemnaWaveClient:
             "trafficLimitStrategy": "NO_RESET",
             "expireAt": expire_at,
             "description": description,
+            "internalSquads": squad_uuids or [],
+            "externalSquads": [],
             "activeUserInbounds": [],
         }
         result = await self._request("POST", "/api/users", data=data)
